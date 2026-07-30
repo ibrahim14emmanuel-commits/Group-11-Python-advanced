@@ -1,252 +1,126 @@
-import os
-from datetime import date
+#
 
 import streamlit as st
-
-from checklist_generator import ChecklistGenerator
+import datetime
+from validators import validate_location, validate_date, validate_activity, InvalidLocationError, InvalidDateError, InvalidActivityError
+from weather_client import WeatherClient, LocationNotFoundError, WeatherAPIError
 from forecast import Forecast
-from recommendation_engine import RecommendationEngine
 from risk_analyzer import ActivityRiskAnalyzer
+from recommendation_engine import RecommendationEngine
+from checklist_generator import ChecklistGenerator
 from storage import StorageManager
-from validators import validate_activity, validate_date, validate_location
-from weather_client import WeatherClient
 
+st.set_page_config(page_title="Weather Risk & Outdoor Activity Planner", page_icon="🌤️", layout="wide")
 
-ACTIVITIES = [
-    "football",
-    "jogging",
-    "farming",
-    "picnic",
-    "travelling",
-    "outdoor event",
-]
+# App Setup
+ALLOWED_ACTIVITIES = ["football", "jogging", "farming", "picnic", "travelling", "outdoor event"]
+storage = StorageManager()
+client = WeatherClient()
+rec_engine = RecommendationEngine(api_key=None)  # Add Gemini API key if available
 
-RISK_LABELS = {
-    "safe": "🟢 Safe",
-    "manageable": "🟡 Manageable",
-    "risky": "🟠 Risky",
-    "avoid": "🔴 Avoid",
-}
+st.title("🌤️ Weather Risk & Outdoor Activity Planner")
 
+# Sidebar - Favourites & History
+with st.sidebar:
+    st.header("📌 Saved Favourites")
+    favs = storage.get_favourites()
+    if favs:
+        for fav in favs:
+            st.write(f"- {fav}")
+    else:
+        st.info("No saved favourite locations yet.")
 
-st.set_page_config(
-    page_title="Weather Risk Planner",
-    page_icon="🌦️",
-    layout="wide",
-)
+    st.markdown("---")
+    st.header("🕒 Recent Search History")
+    history = storage.get_history()
+    if history:
+        for rec in history[:5]:
+            st.caption(f"**{rec.get('location')}** | {rec.get('activity')} ({rec.get('date')})")
+            st.caption(f"Status: {rec.get('risk_level')}")
+            st.markdown("---")
 
+# Main Form Setup
+with st.form("planner_form"):
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        location_input = st.text_input("Enter Location", value="Abuja")
+    with col2:
+        activity_input = st.selectbox("Select Outdoor Activity", options=ALLOWED_ACTIVITIES)
+    with col3:
+        date_input = st.date_input("Select Date", value=datetime.date.today())
 
-try:
-    storage = StorageManager()
-except Exception as error:
-    storage = None
-    st.sidebar.error(f"Storage error: {error}")
+    submit_button = st.form_submit_button("Analyze Plan")
 
-
-st.sidebar.title("🌦️ Weather Planner")
-st.sidebar.subheader("Saved Favourites")
-
-saved_locations = []
-
-if storage:
+# Processing pipeline on submit
+if submit_button:
     try:
-        saved_locations = storage.get_favourites()
-    except Exception as error:
-        st.sidebar.error(f"Could not load favourites: {error}")
+        # Step 1: Input Validation
+        valid_loc = validate_location(location_input)
+        date_str = date_input.strftime("%Y-%m-%d")
+        validate_date(date_str)
+        valid_activity = validate_activity(activity_input, ALLOWED_ACTIVITIES)
 
-if saved_locations:
-    for location in saved_locations:
-        st.sidebar.write(f"⭐ {location}")
-elif storage:
-    st.sidebar.caption("No saved locations yet.")
-else:
-    st.sidebar.caption("Storage is unavailable.")
+        # Step 2: Fetch Raw Weather Data
+        raw_weather = client.fetch_weather(valid_loc)
 
+        # Step 3: Parse weather objects via Person 2's Forecast class
+        forecast_obj = Forecast(raw_weather)
 
-st.sidebar.divider()
-st.sidebar.subheader("Recent Searches")
+        # Step 4: Analyze Risk
+        analyzer = ActivityRiskAnalyzer(forecast_obj, valid_activity)
+        risk_level = analyzer.assess_risk()
+        risk_factors = analyzer.get_risk_factors()
 
-search_history = []
+        # Step 5: Recommendations
+        ai_explanation = rec_engine.generate_explanation(valid_activity, risk_level, risk_factors)
+        best_time = rec_engine.recommend_best_time(forecast_obj.hourly, valid_activity)
 
-if storage:
-    try:
-        search_history = storage.get_history()
-    except Exception as error:
-        st.sidebar.error(f"Could not load history: {error}")
+        # Step 6: Checklist Generation
+        checklist_gen = ChecklistGenerator(forecast_obj, valid_activity)
+        packing_list = checklist_gen.generate()
 
-if search_history:
-    recent_searches = reversed(search_history[-5:])
+        # Step 7: Storage Persistence
+        search_record = {
+            "location": valid_loc,
+            "activity": valid_activity,
+            "date": date_str,
+            "risk_level": risk_level
+        }
+        storage.log_search(search_record)
 
-    for search in recent_searches:
-        history_location = search.get("location", "Unknown")
-        history_activity = search.get("activity", "")
-        history_date = search.get("date", "")
+        # Step 8: Render Results
+        st.subheader(f"Results for {valid_loc.capitalize()} ({date_str})")
+        
+        # Color coding metrics
+        risk_colors = {"Safe": "green", "Manageable": "blue", "Risky": "orange", "Avoid": "red"}
+        st.markdown(f"### Overall Risk Status: :{risk_colors.get(risk_level, 'gray')}[{risk_level}]")
+        
+        st.info(f"**AI Recommendation:** {ai_explanation}")
+        st.success(f"⏰ **Best Recommended Time Window:** {best_time}")
 
-        st.sidebar.markdown(
-            f"📍 **{history_location}**  \n"
-            f"{history_activity.title()} — {history_date}"
-        )
-else:
-    st.sidebar.caption("No search history yet.")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("#### Identified Risk Factors")
+            if risk_factors:
+                for rf in risk_factors:
+                    st.write(f"- {rf}")
+            else:
+                st.write("No specific risks found.")
 
+        with col_b:
+            st.markdown("#### Recommended Packing Checklist")
+            for item in packing_list:
+                st.checkbox(item, key=f"chk_{item}")
 
-st.title("🌦️ Weather Risk & Outdoor Activity Planner")
-st.write(
-    "Check the weather risk, recommended time and items "
-    "to take for an outdoor activity."
-)
+        if st.button("Save Location as Favourite"):
+            storage.add_favourite(valid_loc)
+            st.success(f"Saved {valid_loc} to Favourites!")
 
-
-with st.form("weather_form"):
-    location_input = st.text_input(
-        "Location",
-        placeholder="For example: Abuja",
-    )
-
-    selected_activity = st.selectbox(
-        "Outdoor Activity",
-        ACTIVITIES,
-        format_func=str.title,
-    )
-
-    selected_date = st.date_input(
-        "Date",
-        value=date.today(),
-    )
-
-    submitted = st.form_submit_button(
-        "Analyze Weather",
-        use_container_width=True,
-    )
-
-
-if submitted:
-    try:
-        location = validate_location(location_input)
-        activity = validate_activity(selected_activity, ACTIVITIES)
-
-        date_string = selected_date.strftime("%Y-%m-%d")
-        validate_date(date_string)
-
-        with st.spinner("Checking the weather..."):
-            weather_client = WeatherClient()
-            weather_response = weather_client.fetch_weather(location)
-
-            forecast = Forecast(weather_response)
-            forecast.parse()
-
-            selected_day = forecast.get_forecast_for_date(date_string)
-
-            if selected_day is None:
-                st.warning("No forecast is available for that date.")
-                st.stop()
-
-            analyzer = ActivityRiskAnalyzer(forecast, activity)
-            risk_level = analyzer.assess_risk()
-            risk_factors = analyzer.get_risk_factors()
-
-            gemini_key = os.getenv("GEMINI_API_KEY")
-
-            if not gemini_key:
-                st.error("Add GEMINI_API_KEY to your environment variables.")
-                st.stop()
-
-            recommendation_engine = RecommendationEngine(
-                api_key=gemini_key
-            )
-
-            recommendation = (
-                recommendation_engine.generate_explanation(
-                    activity,
-                    risk_level,
-                    risk_factors,
-                )
-            )
-
-            best_time = recommendation_engine.recommend_best_time(
-                selected_day,
-                activity,
-            )
-
-            checklist_generator = ChecklistGenerator(
-                forecast,
-                activity,
-            )
-
-            packing_list = checklist_generator.generate()
-
-        if storage:
-            try:
-                storage.log_search(
-                    {
-                        "location": location,
-                        "activity": activity,
-                        "date": date_string,
-                        "risk": risk_level,
-                        "best_time": best_time,
-                    }
-                )
-            except Exception as error:
-                st.warning(f"Could not save this search: {error}")
-
-        st.success("Weather analysis completed.")
-        st.header(f"Weather Plan for {location}")
-        st.info(forecast.get_condition_summary())
-
-        normalized_risk = str(risk_level).lower()
-        risk_display = RISK_LABELS.get(
-            normalized_risk,
-            f"⚪ {str(risk_level).title()}",
-        )
-
-        risk_section, time_section = st.columns(2)
-
-        with risk_section:
-            st.metric("Activity Risk", risk_display)
-
-        with time_section:
-            st.metric("Recommended Time", best_time)
-
-        st.divider()
-        st.subheader("Risk Factors")
-
-        if risk_factors:
-            for factor in risk_factors:
-                st.write(f"- {factor}")
-        else:
-            st.write("No major weather risks were detected.")
-
-        st.subheader("AI Recommendation")
-        st.write(recommendation)
-
-        st.subheader("Packing Checklist")
-
-        if packing_list:
-            left_column, right_column = st.columns(2)
-            checklist_columns = [left_column, right_column]
-
-            for index, item in enumerate(packing_list):
-                target_column = checklist_columns[index % 2]
-
-                with target_column:
-                    st.checkbox(
-                        item,
-                        key=f"packing_item_{index}",
-                    )
-        else:
-            st.write("No special items are required.")
-
-        st.divider()
-
-        if storage and st.button("Save Location as Favourite"):
-            try:
-                storage.add_favourite(location)
-                st.success(f"{location} was added to favourites.")
-            except Exception as error:
-                st.error(f"Could not save location: {error}")
-
-    except ValueError as error:
-        st.error(str(error))
-
-    except Exception as error:
-        st.error(f"Weather analysis failed: {error}")
+    except (InvalidLocationError, InvalidDateError, InvalidActivityError) as ve:
+        st.error(f"Input Validation Error: {ve}")
+    except LocationNotFoundError as le:
+        st.warning(f"Location Error: {le}")
+    except WeatherAPIError as we:
+        st.error(f"Weather API Error: {we}")
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
