@@ -1,13 +1,19 @@
+"""
+This module uses Gemini AI to generate natural language weather advice and 
+finds the best time window for planned outdoor activities.
+
+"""
+
+
 import os
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+
 load_dotenv()
 
 class RecommendationEngine:
     def __init__(self, api_key: str = None):
-        # 1. Use passed key if provided, 2. Otherwise load from .env, 3. Default to None
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         
         if self.api_key:
@@ -15,9 +21,14 @@ class RecommendationEngine:
 
     def generate_explanation(self, activity: str, risk_level: str, risk_factors: list) -> str:
         """Queries Gemini API for concise natural language explanation, fallback on failure."""
+        if risk_factors:
+            formatted_factors = ", ".join(risk_factors)
+        else:
+            formatted_factors = "None"
+
         prompt = (
             f"The user wants to do '{activity}'. The risk level is evaluated as '{risk_level}'. "
-            f"Identified risk factors: {', '.join(risk_factors) if risk_factors else 'None'}. "
+            f"Identified risk factors: {formatted_factors}. "
             "Explain in 2-3 friendly sentences why this risk assessment was given and provide practical guidance."
         )
 
@@ -28,9 +39,9 @@ class RecommendationEngine:
                 if response and response.text:
                     return response.text.strip()
             except Exception:
-                pass  # Gracefully fall through to rule-based fallback on API failure
+                pass  
 
-        # Rule-based fallback mechanism required by project specs
+        
         if risk_level == "Safe":
             return f"Conditions look great for {activity}! Enjoy your time outdoors with standard preparation."
         elif risk_level == "Manageable":
@@ -45,12 +56,25 @@ class RecommendationEngine:
         if not hourly_forecast:
             return "No hourly detail available."
 
-        best_hour = min(
-            hourly_forecast,
-            key=lambda x: (x.get("rain_chance", 0), abs(x.get("temp_c", 25) - 22))
-        )
-        time_str = best_hour.get("time", "06:00")
-        
+        best_hour = None
+        best_score = None
+
+        for hour in hourly_forecast:
+            rain = hour.get("rain_chance", 0)
+            temp = hour.get("temp_c", 25)
+            
+            temp_difference = abs(temp - 22)
+            score = (rain, temp_difference)
+            
+            if best_score is None or score < best_score:
+                best_score = score
+                best_hour = hour
+
+        if best_hour:
+            time_str = best_hour.get("time", "06:00")
+        else:
+            time_str = "06:00"
+
         try:
             hour_num = int(time_str.split(":")[0])
             end_hour = (hour_num + 2) % 24
