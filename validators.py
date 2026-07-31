@@ -28,7 +28,7 @@ def validate_location(location: str) -> str:
     if not cleaned:
         raise InvalidLocationError("Location cannot be empty whitespace.")
     
-    if not re.match(r"^[a-zA-A\s,\'-]+$", cleaned):
+    if not re.match(r"^[a-zA-Z\s,\'-]+$", cleaned):
         raise InvalidLocationError("Location contains invalid characters.")
     
     return cleaned
