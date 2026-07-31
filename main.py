@@ -1,4 +1,4 @@
-#
+
 
 import streamlit as st
 import datetime
@@ -17,6 +17,9 @@ ALLOWED_ACTIVITIES = ["football", "jogging", "farming", "picnic", "travelling", 
 storage = StorageManager()
 client = WeatherClient()
 rec_engine = RecommendationEngine(api_key=None)  # Add Gemini API key if available
+
+if "analyzed_data" not in st.session_state:
+    st.session_state.analyzed_data = None
 
 st.title("🌤️ Weather Risk & Outdoor Activity Planner")
 
@@ -88,33 +91,15 @@ if submit_button:
         }
         storage.log_search(search_record)
 
-        # Step 8: Render Results
-        st.subheader(f"Results for {valid_loc.capitalize()} ({date_str})")
-        
-        # Color coding metrics
-        risk_colors = {"Safe": "green", "Manageable": "blue", "Risky": "orange", "Avoid": "red"}
-        st.markdown(f"### Overall Risk Status: :{risk_colors.get(risk_level, 'gray')}[{risk_level}]")
-        
-        st.info(f"**AI Recommendation:** {ai_explanation}")
-        st.success(f"⏰ **Best Recommended Time Window:** {best_time}")
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.markdown("#### Identified Risk Factors")
-            if risk_factors:
-                for rf in risk_factors:
-                    st.write(f"- {rf}")
-            else:
-                st.write("No specific risks found.")
-
-        with col_b:
-            st.markdown("#### Recommended Packing Checklist")
-            for item in packing_list:
-                st.checkbox(item, key=f"chk_{item}")
-
-        if st.button("Save Location as Favourite"):
-            storage.add_favourite(valid_loc)
-            st.success(f"Saved {valid_loc} to Favourites!")
+        st.session_state.analyzed_data = {
+            "valid_loc": valid_loc,
+            "date_str": date_str,
+            "risk_level": risk_level,
+            "ai_explanation": ai_explanation,
+            "best_time": best_time,
+            "risk_factors": risk_factors,
+            "packing_list": packing_list
+        }
 
     except (InvalidLocationError, InvalidDateError, InvalidActivityError) as ve:
         st.error(f"Input Validation Error: {ve}")
@@ -124,3 +109,35 @@ if submit_button:
         st.error(f"Weather API Error: {we}")
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
+
+if st.session_state.analyzed_data:
+    data = st.session_state.analyzed_data
+
+    # Step 8: Render Results
+    st.subheader(f"Results for {data['valid_loc'].capitalize()} ({data['date_str']})")
+    
+    # Color coding metrics
+    risk_colors = {"Safe": "green", "Manageable": "blue", "Risky": "orange", "Avoid": "red"}
+    st.markdown(f"### Overall Risk Status: :{risk_colors.get(data['risk_level'], 'gray')}[{data['risk_level']}]")
+    
+    st.info(f"**AI Recommendation:** {data['ai_explanation']}")
+    st.success(f"⏰ **Best Recommended Time Window:** {data['best_time']}")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("#### Identified Risk Factors")
+        if data['risk_factors']:
+            for rf in data['risk_factors']:
+                st.write(f"- {rf}")
+        else:
+            st.write("No specific risks found.")
+
+    with col_b:
+        st.markdown("#### Recommended Packing Checklist")
+        for item in data['packing_list']:
+            st.checkbox(item, key=f"chk_{item}")
+
+    if st.button("Save Location as Favourite"):
+        storage.add_favourite(data['valid_loc'])
+        st.success(f"Saved {data['valid_loc']} to Favourites!")
+        st.rerun()
